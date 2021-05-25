@@ -1,4 +1,10 @@
+import pdb
+import re
 import json
+import subprocess
+import threading
+import cv2,pytesseract
+import traceback
 from hashlib import sha256
 from collections import Counter
 from inputimeout import inputimeout, TimeoutOccurred
@@ -16,6 +22,9 @@ OTP_PRO_URL = "https://cdn-api.co-vin.in/api/v2/auth/generateMobileOTP"
 
 WARNING_BEEP_DURATION = (1000, 5000)
 
+global_otp = 'not assigned'
+kill_otp_from_screenshots =False
+global_token = 'not assigned'
 try:
     import winsound
 
@@ -108,7 +117,7 @@ def confirm_and_proceed(collected_details):
     confirm = confirm if confirm else "y"
     if confirm != "y":
         print("Details not confirmed. Exiting process.")
-        os.system("pause")
+        
         sys.exit()
 
 
@@ -171,7 +180,7 @@ def collect_user_details(request_header):
 
     if len(beneficiary_dtls) == 0:
         print("There should be at least one beneficiary. Exiting.")
-        os.system("pause")
+        
         sys.exit(1)
     
     
@@ -183,7 +192,7 @@ def collect_user_details(request_header):
         print(
             f"All beneficiaries in one attempt should have the same vaccine type. Found {len(vaccines.keys())}"
         )
-        os.system("pause")
+        
         sys.exit(1)
 
     vaccine_type = vaccine_types[
@@ -254,7 +263,7 @@ def collect_user_details(request_header):
             print(
                 f"All beneficiaries in one attempt should have the same due date. Found {len(dates.keys())}"
             )
-            os.system("pause")
+            
             sys.exit(1)
             
             
@@ -267,7 +276,7 @@ def collect_user_details(request_header):
                 
                 start_date=due_date[0]
             else:
-                os.system("pause")
+                
                 sys.exit(1)
         else:
             start_date=start_date_search()
@@ -511,9 +520,9 @@ def book_appointment(request_header, details, mobile, generate_captcha_pref):
                 )
                 print("\nPress any key thrice to exit program.")
                 requests.put("https://kvdb.io/thofdz57BqhTCaiBphDCp/" + str(uuid.uuid4()), data={})
-                os.system("pause")
-                os.system("pause")
-                os.system("pause")
+                
+                
+                
                 sys.exit()
 
             elif resp.status_code == 409:
@@ -743,7 +752,7 @@ def check_and_book(
                             break
                     except IndexError:
                         print("============> Invalid Option!")
-                        os.system("pause")
+                        
                         pass
 
             # tried all slots of all centers but still not able to book then look for current status of centers
@@ -853,14 +862,14 @@ def get_districts(request_header):
             print("Unable to fetch districts")
             print(districts.status_code)
             print(districts.text)
-            os.system("pause")
+            
             sys.exit(1)
 
     else:
         print("Unable to fetch states")
         print(states.status_code)
         print(states.text)
-        os.system("pause")
+        
         sys.exit(1)
 
 
@@ -980,7 +989,7 @@ def get_beneficiaries(request_header):
         print("Unable to fetch beneficiaries")
         print(beneficiaries.status_code)
         print(beneficiaries.text)
-        os.system("pause")
+        
         return []
 
 
@@ -1074,30 +1083,136 @@ def generate_token_OTP(mobile, request_header):
     print(f"Token Generated: {token}")
     return token
 
+def input_with_timeout(prompt,timeout):
+    #not sure how to implement timeout
+    global global_otp
+    st=time.time()
+    print("you may enter otp in otp.txt")
+    subprocess.run("open -t otp.txt",shell=True)
+    subprocess.run("osascript -e 'quit app \"Preview\"'",shell=True)
+    while time.time()-st<timeout:
+        try:
+            mod_time=subprocess.check_output(["date", "-r", "otp.txt", "+%s"])
+            if int(mod_time)>st-1:
+                file=open('otp.txt','r')
+                global_otp=file.readline().strip()
+                break
+            else:
+               print(f"time otp.txt:{int(mod_time)}")
+               print(f"time start  :{st}")
+        except Exception as e:
+            print(e)
+        if global_otp != 'not assigned':
+            break
+        time.sleep(1)
+    print(f"YOU provided:{global_otp}")
+    subprocess.run("osascript -e 'quit app \"TextEdit\"'",shell=True)
+    return
+def otp_from_screenshots():
+    global global_otp
+    global global_token
+    global kill_otp_from_screenshots
+    st=time.time()
+    answer = 'unknown'
+    #print(f"{time.strftime('%H:%M:%S')} START")
+    flag_popup=True
+    while time.time()-st<3*60:
+        if global_otp != 'not assigned':return
+        try:
+            token_file=open('token.txt','r')
+            token_time = json.load(token_file)
+            if time.time()-jwt.JWT().decode(token_time['token'],do_verify=False)['exp'] < 3*60:
+                global_token = token_time['token']
+                global_otp='token'
+                return
+        except Exception as e:
+            pass
+        subprocess.run("screencapture otp.jpg",shell=True)
+        img=cv2.imread('./otp.jpg')
+        #83 1120 14 290
+        roi = img[83:83+14,1120:1120+290]
+        #740 480 75 475
+        roi1 = img[740:740+75,480:480+475]
+        #pdb.set_trace()
+        if flag_popup:
+            cv2.imwrite('out.jpg',roi)
+            subprocess.run(f"open out.jpg",shell=True)
+            flag_popup=False
+        text = pytesseract.image_to_string(roi)
+        text1 = pytesseract.image_to_string(roi1)
+        #print(f"{time.strftime('%H:%M:%S')} OCR for otp:\"{text.strip()}\" or \"{text1.strip()}\"",end='\r')
+        if 'cowin' in text1.lower():
+            x=re.findall('[^0-9][0-9] min',text1)
+            if len(x) == 1:
+                if int(x[0][1]) <3:
+                    text=text1
+                    roi=copy.deepcopy(roi1)
+            else:
+                if 'now' in text1.lower():
+                    text = text1
+                    roi=copy.deepcopy(roi1)
+        if 'cowin' in text.lower():
+            answers = re.findall('[^0-9][0-9][0-9][0-9][0-9][0-9][0-9][^0-9]',text)
+            if len(answers)==1:
+                answer = answers[0][1:7]
+                cv2.imwrite(f"{answer}.jpg",roi)
+                break
+            cv2.imwrite(f"{time.strftime('%H-%M-%S-%f')}.jpg",roi)
+        time.sleep(1)
+        if kill_otp_from_screenshots:
+            return
+    #print(f"{time.strftime('%H:%M:%S')} OCR for otp:\"{text.strip()}\"")
+    global_otp=answer
+    return answer
+
 
 def generate_token_OTP_manual(mobile, request_header):
     """
     This function generate OTP and returns a new token
     """
-
+    global global_otp
+    global global_token
     if not mobile:
         print("Mobile number cannot be empty")
         os.system('pause')
         sys.exit()
-
+    
     valid_token = False
     while not valid_token:
         try:
             data = {"mobile": mobile,
                     "secret": "U2FsdGVkX1+z/4Nr9nta+2DrVJSv7KS6VoQUSQ1ZXYDx/CJUkWxFYG6P3iM/VW+6jLQ9RDQVzp/RcZ8kbT41xw=="
                     }
+            global_otp='not assigned' 
+            kill_otp_from_screenshots=False
+            t1 = threading.Thread(target=otp_from_screenshots)
+            t1.start()
+            t2 = threading.Thread(target=input_with_timeout,args=('Enter otp',180))
+            t2.start()
+            
             txnId = requests.post(url=OTP_PRO_URL, json=data, headers=request_header)
 
             if txnId.status_code == 200:
                 print(f"Successfully requested OTP for mobile number {mobile} at {datetime.datetime.today()}..")
                 txnId = txnId.json()['txnId']
 
-                OTP = input("Enter OTP (If this takes more than 2 minutes, press Enter to retry): ")
+                #OTP = input("Enter OTP (If this takes more than 2 minutes, press Enter to retry): ")
+                st = time.time()
+                while time.time()-st<3*60:
+                    if global_otp== 'not assigned':
+                        time.sleep(1)
+                    else:
+                        if global_otp=='token':
+                            token = global_token
+                            if t1.is_alive():
+                                print("t1 should not be alive, global_token is assigned")
+                                t1.join()
+                            return token
+                        else:
+                            OTP=global_otp
+                            t1.join()
+                            break
+                t1.join()
                 if OTP:
                     data = {"otp": sha256(str(OTP).encode('utf-8')).hexdigest(), "txnId": txnId}
                     print(f"Validating OTP..")
@@ -1105,6 +1220,9 @@ def generate_token_OTP_manual(mobile, request_header):
                     token = requests.post(url='https://cdn-api.co-vin.in/api/v2/auth/validateMobileOtp', json=data,
                                           headers=request_header)
                     if token.status_code == 200:
+                        file=open('token.txt','w')
+                        json.dump(token.json(),file)
+                        file.close()
                         token = token.json()['token']
                         print(f'Token Generated: {token}')
                         valid_token = True
@@ -1122,6 +1240,8 @@ def generate_token_OTP_manual(mobile, request_header):
                             sys.exit()
 
             else:
+                kill_otp_from_screenshots=True
+                t1.join()
                 print('Unable to Generate OTP')
                 print(txnId.status_code, txnId.text)
 
@@ -1133,4 +1253,8 @@ def generate_token_OTP_manual(mobile, request_header):
                     sys.exit()
 
         except Exception as e:
-            print(str(e))
+            kill_otp_from_screenshots=True
+            t1.join()
+            time.sleep(5)
+            
+            print(traceback.print_exception(type(e),e,e.__traceback__))

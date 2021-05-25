@@ -9,14 +9,24 @@ import jwt
 from utils import generate_token_OTP, generate_token_OTP_manual, check_and_book, beep, BENEFICIARIES_URL, WARNING_BEEP_DURATION, \
     display_info_dict, save_user_info, collect_user_details, get_saved_user_info, confirm_and_proceed, get_dose_num, display_table, fetch_beneficiaries
 
+
 def is_token_valid(token):
-    payload = jwt.decode(token, options={"verify_signature": False})
+    #check for a new token from token.txt
+    try:
+        file=open('token.txt','r')
+        json.loads(file,token_info)
+        token = token_info['token']
+    except:
+        pass
+    if token == None:
+        return None
+    payload = jwt.JWT().decode(token, do_verify = False)
     remaining_seconds = payload['exp'] - int(time.time())
     if remaining_seconds <= 1*30: # 30 secs early before expiry for clock issues
-        return False
+        return None
     if remaining_seconds <= 60:
         print("Token is about to expire in next 1 min ...")
-    return True
+    return token
 
 def main():
     parser = argparse.ArgumentParser()
@@ -38,23 +48,13 @@ def main():
         }
 
         token = None
+        is_token_valid(token) #fetches token from token.txt if valid
         if args.token:
             token = args.token
-        else:
-            mobile = input("Enter the registered mobile number: ")
-            filename = filename + mobile + ".json"
-            otp_pref = input("\nDo you want to enter OTP manually, instead of auto-read? \nRemember selecting n would require some setup described in README (y/n Default n): ")
-            otp_pref = otp_pref if otp_pref else "n"
-            while token is None:
-                if otp_pref=="n":
-                    try:
-                        token = generate_token_OTP(mobile, base_request_header)
-                    except Exception as e:
-                        print(str(e))
-                        print('OTP Retrying in 5 seconds')
-                        time.sleep(5)
-                elif otp_pref=="y":
-                    token = generate_token_OTP_manual(mobile, base_request_header)
+        mobile = input("Enter the registered mobile number: ")
+        filename = filename + mobile + ".json"
+        while token is None:
+                token = generate_token_OTP_manual(mobile, base_request_header)
 
         request_header = copy.deepcopy(base_request_header)
         request_header["Authorization"] = f"Bearer {token}"
@@ -120,27 +120,18 @@ def main():
         while True: # infinite-loop
             # create new request_header
             request_header = copy.deepcopy(base_request_header)
-            request_header["Authorization"] = f"Bearer {token}"
 
             # call function to check and book slots
             try:
-                token_valid = is_token_valid(token)
+                token = is_token_valid(token)
 
                 # token is invalid ? 
                 # If yes, generate new one
-                if not token_valid: 
+                if token == None: 
                     print('Token is INVALID.')
-                    token = None
                     while token is None:
-                        if otp_pref=="n":
-                            try:
-                                token = generate_token_OTP(mobile, base_request_header)
-                            except Exception as e:
-                                print(str(e))
-                                print('OTP Retrying in 5 seconds')
-                                time.sleep(5)
-                        elif otp_pref=="y":
-                            token = generate_token_OTP_manual(mobile, base_request_header)
+                        token = generate_token_OTP_manual(mobile, base_request_header)
+                request_header["Authorization"] = f"Bearer {token}"
 
                 check_and_book(
                     request_header, 
@@ -159,14 +150,14 @@ def main():
                     dose_num=get_dose_num(collected_details)
                             )
             except Exception as e:
-                print(str(e))
+                print(traceback.print_exception(type(e),e,e.__traceback__))
                 print('Retryin in 5 seconds')
                 time.sleep(5)
 
     except Exception as e:
-        print(str(e))
+        print(traceback.print_exception(type(e),e,e.__traceback__))
         print('Exiting Script')
-        os.system("pause")
+        
 
 
 if __name__ == '__main__':

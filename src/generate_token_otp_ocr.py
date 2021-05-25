@@ -67,7 +67,7 @@ def otp_from_screenshots():
     flag_popup=True
     while time.time()-st<3*60:
         try:
-            token_file=open('tokenfile.txt','r')
+            token_file=open('token.txt','r')
             token_time = json.load(token_file)
             if time.time()-float(token_time['time']) < 3*60:
                 global_token = token_time['token']
@@ -223,7 +223,7 @@ def generate_token_OTP(mobile, request_header, device_os):
                 time.sleep(1)
         if token.status_code == 200:
             token = token.json()["token"]
-            token_file=open('tokenfile.txt','w')
+            token_file=open('token.txt','w')
             temp_token_time={'token':token,'time':time.time()}
             json.dump(temp_token_time,token_file)
             token_file.close()
@@ -253,7 +253,7 @@ def generate_token_OTP(mobile, request_header, device_os):
                 OTP=global_otp
             
 
-    print(f"Token Generated in file tokenfile.txt\nDecoded token: {jwt.JWT().decode(token,do_verify=False)}")
+    print(f"Token Generated in file token.txt\nDecoded token: {jwt.JWT().decode(token,do_verify=False)}")
     print(f"{time.ctime(jwt.JWT().decode(token,do_verify=False)['iat']).split()[3]} Start")
     print(f"{time.ctime(jwt.JWT().decode(token,do_verify=False)['exp']).split()[3]} Expiry")
     return token
