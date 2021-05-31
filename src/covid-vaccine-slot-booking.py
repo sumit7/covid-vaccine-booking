@@ -1,33 +1,38 @@
 #!/usr/bin/env python3
 
-import copy
+#import signal
+import copy,threading,subprocess
 import traceback
-import time
+import time,json
 from types import SimpleNamespace
 import requests, sys, argparse, os, datetime
-import jwt
+import jwt,pdb
 from utils import generate_token_OTP, generate_token_OTP_manual, check_and_book, beep, BENEFICIARIES_URL, WARNING_BEEP_DURATION, \
     display_info_dict, save_user_info, collect_user_details, get_saved_user_info, confirm_and_proceed, get_dose_num, display_table, fetch_beneficiaries
 
 
 def is_token_valid(token):
     #check for a new token from token.txt
+    #pdb.set_trace()
     try:
         file=open('token.txt','r')
-        json.loads(file,token_info)
+        token_info=json.load(file)
         token = token_info['token']
-    except:
-        pass
+    except Exception as e:
+        print(e)
     if token == None:
         return None
-    payload = jwt.JWT().decode(token, do_verify = False)
+    try:
+        payload = jwt.JWT().decode(token, do_verify = False)
+    except Exception as e:
+        print(e)
+        return None
     remaining_seconds = payload['exp'] - int(time.time())
     if remaining_seconds <= 1*30: # 30 secs early before expiry for clock issues
         return None
     if remaining_seconds <= 60:
         print("Token is about to expire in next 1 min ...")
     return token
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--token', help='Pass token directly')
@@ -38,6 +43,8 @@ def main():
 
     print('Running Script')
     beep(500, 150)
+    proc=subprocess.Popen(["caffeinate", "-d"]) #Prevents display turning off
+
 
     try:
         base_request_header = {
@@ -48,10 +55,14 @@ def main():
         }
 
         token = None
-        is_token_valid(token) #fetches token from token.txt if valid
+        token=is_token_valid(token) #fetches token from token.txt if valid
+        #pdb.set_trace()
         if args.token:
             token = args.token
-        mobile = input("Enter the registered mobile number: ")
+        print("Sumit  Airtel  Hotspot number : 9028865261")
+        print("mintu (Niraj Dete):            9146725202")
+        mobile = input("Enter the registered mobile number Default 9028865261: ")
+        if mobile == "":mobile='9028865261'
         filename = filename + mobile + ".json"
         while token is None:
                 token = generate_token_OTP_manual(mobile, base_request_header)
@@ -147,7 +158,8 @@ def main():
                     fee_type=info.fee_type,
                     mobile=mobile,
                     captcha_automation=info.captcha_automation,
-                    dose_num=get_dose_num(collected_details)
+                    dose_num=get_dose_num(collected_details),
+                    do_not_book=info.do_not_book
                             )
             except Exception as e:
                 print(traceback.print_exception(type(e),e,e.__traceback__))
@@ -156,6 +168,9 @@ def main():
 
     except Exception as e:
         print(traceback.print_exception(type(e),e,e.__traceback__))
+
+        proc.kill()
+        proc.wait()
         print('Exiting Script')
         
 

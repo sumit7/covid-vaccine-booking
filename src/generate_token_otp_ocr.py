@@ -286,6 +286,7 @@ def main():
         token = args.token
     print("Ashoknagar Aknit Badkul      : 8884351234")
     print("my hotspot number(for dhayri): 9028865261")
+    print("mintu (Niraj Dete):            9146725202")
     mobile = input("Enter the registered mobile number: ")
     t = time.time()
     while True:

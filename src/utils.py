@@ -1,4 +1,5 @@
-import pdb
+import signal
+import pdb,jwt
 import re
 import json
 import subprocess
@@ -22,9 +23,18 @@ OTP_PRO_URL = "https://cdn-api.co-vin.in/api/v2/auth/generateMobileOTP"
 
 WARNING_BEEP_DURATION = (1000, 5000)
 
+origins = ['303,Dhanori Road, Pune, 411015, Maharashtra, India']
+#origins = ['B14 Mangal Bhairav, Ghule Patil Nagar, Pandurang Industrial Area, Nanded, Pune, Maharashtra 411041']
 global_otp = 'not assigned'
 kill_otp_from_screenshots =False
 global_token = 'not assigned'
+flag_update_from_file=True
+global_distance_from_home={}
+st=time.time()
+kill_otp_from_notifications = False
+time_req = []
+reccomended_delay=4
+additionally_needed_delay=0
 try:
     import winsound
 
@@ -47,19 +57,224 @@ else:
 
     def beep(freq, duration):
         winsound.Beep(freq, duration)
+def check_req_delay(place="unknown"):
+    global time_req
+    global reccomended_delay
+    global additionally_needed_delay
+    temp=time.time()
+    if len(time_req) !=0:
+        delay = time.time()-time_req[len(time_req)-1]
+        delay = round(delay*100)/100
+        if delay < reccomended_delay+additionally_needed_delay:
+            time.sleep(additionally_needed_delay+reccomended_delay-delay)
+        if len(time_req) >=1000:
+            time_req.clear()
+    time_req.append(time.time())
+    #print(f"delay={time.time()-temp:.2f}",end=" ",flush=True)
+    #print(str(f"{time.strftime('%H:%M:%S')} req:{place}").ljust(50),end=" ",flush=True)
 
+def global_distance_update_from_file():
+    global global_distance_from_home
+    
+    
+    global origins
+    
+    print(f"NOTE: Calculating distance from {origins}")
+    print(
+        "==================================================================================="
+    )
+    try:
+        with open(f"{origins[0].replace(' ','_')}.json") as json_file:
+            global_distance_from_home = json.load(json_file)
+    except FileNotFoundError as e:
+        traceback.print_exception(type(e),e,e.__traceback__)
+        return
+def global_distance_from_home_update_file():
+    #pdb.set_trace()
+    global global_distance_from_home
+    global origins
+    with open(f"{origins[0].replace(' ','_')}.json", 'w+') as f:
+        # this would place the entire output on one line
+        # use json.dump(lista_items, f, indent=4) to "pretty-print" with four spaces per indent
+        json.dump(global_distance_from_home, f)
+    
+def distance_from_home(centers_list):
+    global flag_update_from_file
+    if flag_update_from_file:
+        global_distance_update_from_file()
+        flag_update_from_file=False
+    ##pdb.set_trace()
+    #print(f"distance_from_home{centers_list}")
+    global global_distance_from_home
+    
+    
+    global origins
+    missing_indices=[]
+    for i in range(len(centers_list)):
+        #pdb.set_trace()
+        if f"{centers_list[i]['center_id']}" in global_distance_from_home:
+            centers_list[i].update({"travel":global_distance_from_home[str(centers_list[i]['center_id'])]})
+        else:
+            missing_indices.append(i)
+    #print(missing_indices)
+    if len(missing_indices) == 0:
+        return
+    api_key = 'AIzaSyDI2Xaz2qr80wpzDtyOzYjYA9VdikKmjw0'
+    base_url = 'https://maps.googleapis.com/maps/api/distancematrix/json?'
+    destinations = []
+    for j in missing_indices:
+        destinations.append(f"{centers_list[j]['address']}, {centers_list[j]['pincode']},{centers_list[j]['district_name']}, ")
+    payload = {
+        'origins' : '|'.join(origins),
+        'destinations' : '|'.join(destinations),
+        'mode' : 'driving',
+        'key' : api_key
+    }
+    #print("Calling google distance matrix api")
+    #print(payload)
+    r = requests.get(base_url, params = payload)
+    #print(r.text)
+    unknown = {'distance': {'text': 'unknown km', 'value': -1}, 'duration': {'text': 'unknown mins', 'value': -1}}
+    googlemap=[]
+    if r.status_code != 200:
+        print('HTTP status code {} received, program terminated.'.format(r.status_code))
+    else:
+#        #pdb.set_trace()    
+        x = json.loads(r.text)
+        if x['status'] == 'OK':
+            for row in x['rows']:
+                for element in row['elements']:
+                    if element['status'] == 'OK':
+                        element.pop('status')
+                        googlemap.append(element)
+                        global_distance_from_home.update({f"{centers_list[i]['center_id']}":copy.deepcopy(element)})
+                    else:
+                        temp_dest = [f"{centers_list[i]['pincode']}, {centers_list[i]['district_name']}"]
+                        temp_payload = {
+                            'origins' : '|'.join(origins),
+                            'destinations' : '|'.join(temp_dest),
+                            'mode' : 'driving',
+                            'key' : api_key
+                        }
+                        #print("Calling google distance matrix api")
+                        #print(temp_payload)
+                        r1 = requests.get(base_url, params = temp_payload)
+                        #print(r1.text)
+                        y = json.loads(r.text)
+                        if x['status'] == 'OK':
+                            if x['rows'][0]['elements'][0]['status'] == 'OK':
+                                el = x['rows'][0]['elements'][0]
+                                el.pop('status')
+                                googlemap.append(el)
+                                global_distance_from_home.update({f"{centers_list[i]['center_id']}":copy.deepcopy(el)})
+                            else:
+                                googlemap.append(copy.deepcopy(unknown))
+        else:
+            #print(x)
+            for i in range (len(missing_indices)):
+                googlemap.append(copy.deepcopy(unknown))
+    #print(missing_indices)
+    
+    for i in range(len(missing_indices)):
+        if googlemap[i]['distance']['value'] == -1:
+            global_distance_from_home.update({f"{centers_list[i]['center_id']}":copy.deepcopy(unknown)})
+    for i in range(len(missing_indices)):
+        centers_list[missing_indices[i]].update({"travel":   googlemap[i]  })
+    global_distance_from_home_update_file()
+    
+    
+    return
+
+
+
+
+#####
+
+def get_all_dist(resp):
+    if "centers" in resp:
+        if len(resp["centers"]) >= 0:
+            for center in resp["centers"]:
+                distance_from_home([copy.deepcopy(center)])
+        
+            
+
+def write_file(cleaned_options_for_display):
+    #pdb.set_trace()
+    #distance_from_home(cleaned_options_for_display)
+    for x in cleaned_options_for_display:
+        try:
+            filename = f"{x['district_name']}_{x['pincode']}_{x['center_id']}_{x['date']}_{x['age']}.txt"
+        except Exception as e:
+            print(traceback.print_exception(type(e),e,e.__traceback__))
+            filename = "rest_availability.txt"
+        file = open(filename,'a')
+        x.update({'time':time.strftime('%d-%m-%Y %H:%M:%S')})
+        file.write(json.dumps(x))
+        file.write('\n')
+        file.close()
+
+
+
+def record_availability(resp, minimum_slots,dose_num):
+    options = []
+    if len(resp["centers"]) >= 0:
+        for center in resp["centers"]:
+            distance_from_home([center])
+            for session in center["sessions"]:
+                available_capacity = min(session[f'available_capacity_dose{dose_num}'], session['available_capacity'])
+                if available_capacity >= minimum_slots:
+                    out = {
+                        "name": center["name"],
+                        "district_name": center["district_name"],
+                        "pincode": center["pincode"],
+                        "center_id": center["center_id"],
+                        "vaccine": session["vaccine"],
+                        "fee_type": center["fee_type"],
+                        "available": available_capacity,
+                        "date": session["date"],
+                        "slots": session["slots"],
+                        "session_id": session["session_id"],
+                        "address": center["address"],
+                        "distance": center["travel"],
+                        "age":session["min_age_limit"]
+                    }
+                    options.append(out)
+                    print(f"{center['name'].ljust(30)} {session['min_age_limit']}yrs {available_capacity}available {center['travel']['distance']['value']/1000:.1f}km {session['vaccine']}")
+
+                else:
+                    pass
+    else:
+        pass
+    write_file(options)
+    #if 'centers' in resp:
+    #    if len(resp['centers'])>0:
+    #        print(str(f" {len(options)} in {len(resp['centers'])} "))
+    #    else:print(f"resp['centers']={resp['centers']}")
+    #else:print(f"resp={resp}")
+    return 
 
 def viable_options(resp, minimum_slots, min_age_booking, fee_type, dose_num):
     options = []
     if len(resp["centers"]) >= 0:
         for center in resp["centers"]:
+            cent_temp=[copy.deepcopy(center)]
+            distance_from_home(cent_temp)
             for session in center["sessions"]:
+                #filename = f"{cent_temp[0]['district_name']}_distances_{session['min_age_limit']}.txt"
+                #temp_file=open(filename,'a')
+                #json.dump(temp_file,center)
+                #temp_file.close()
                 # Cowin uses slot number for display post login, but checks available_capacity before booking appointment is allowed
                 available_capacity = min(session[f'available_capacity_dose{dose_num}'], session['available_capacity'])
+                if center["fee_type"] == 'Paid':
+                    fee = int(center['vaccine_fees'][0]['fee'])
+                else:
+                    fee = 0
                 if (
                         (available_capacity >= minimum_slots)
-                        and (session["min_age_limit"] <= min_age_booking)
                         and (center["fee_type"] in fee_type)
+                        and (cent_temp[0]['travel']['distance']['value']<=12000 )
+                        and (fee <= 1000)
                 ):
                     out = {
                         "name": center["name"],
@@ -72,10 +287,14 @@ def viable_options(resp, minimum_slots, min_age_booking, fee_type, dose_num):
                         "date": session["date"],
                         "slots": session["slots"],
                         "session_id": session["session_id"],
+                        "address": center["address"],
+                        "age":session["min_age_limit"],
+                        "dist":cent_temp[0]['travel']['distance']['text']
                     }
                     options.append(out)
 
                 else:
+                    print(f"skipping {center['name'].center(35)} {cent_temp[0]['travel']['distance']['text']} {available_capacity}available fee={fee}")
                     pass
     else:
         pass
@@ -90,6 +309,9 @@ def display_table(dict_list):
         2. Add an Index column, and
         3. Displays the data in tabular format
     """
+    if len(dict_list)==0:
+        print(f"dict_list empty:{dict_list}")
+        return
     header = ["idx"] + list(dict_list[0].keys())
     rows = [[idx + 1] + list(x.values()) for idx, x in enumerate(dict_list)]
     print(tabulate.tabulate(rows, header, tablefmt="grid"))
@@ -299,6 +521,9 @@ def collect_user_details(request_header):
 
     captcha_automation = input("Do you want to automate captcha autofill? (y/n) Default y: ")
     captcha_automation = "y" if not captcha_automation else captcha_automation
+    do_not_book = input("Do you want to just observe and not book?(y/n) Default y: ")
+    do_not_book = "y" if not do_not_book else do_not_book
+    
 
     collected_details = {
         "beneficiary_dtls": beneficiary_dtls,
@@ -312,6 +537,7 @@ def collect_user_details(request_header):
         "vaccine_type": vaccine_type,
         "fee_type": fee_type,
         'captcha_automation': captcha_automation,
+        'do_not_book': do_not_book,
     }
 
     return collected_details
@@ -332,8 +558,21 @@ def filter_centers_by_age(resp, min_age_booking):
                         resp["centers"].remove(center)
 
     return resp
-
-
+def weekend(start_date):
+    return datetime.datetime.fromtimestamp((int(datetime.datetime.strptime(start_date,"%d-%m-%Y").strftime('%s'))+7*24*3600)).strftime('%d-%m-%Y')
+def day_words(start_date):
+    # x = input_midnight - now
+    # input == today =>> 0 to -24hours
+    # input->yesterday -->> -24 to -24*2
+    # input -> tomorrow ->  24 to 0
+    x = int(datetime.datetime.strptime(start_date,"%d-%m-%Y").strftime('%s'))-int(datetime.datetime.today().strftime('%s'))
+    if x>-24*60*60 and x<=0:
+        return "Today"
+    if x>0 and x<=24*60*60:
+        return "Tomorrow"
+    if x<=-24*60*60 and x>-2*24*60*60:
+        return "Yesterday"
+    return start_date
 def check_calendar_by_district(
         request_header,
         vaccine_type,
@@ -343,7 +582,9 @@ def check_calendar_by_district(
         min_age_booking,
         fee_type,
         dose_num,
-        beep_required=True
+        do_not_book,
+        beep_required=True,
+        mobile=""
 ):
     """
     This function
@@ -357,38 +598,95 @@ def check_calendar_by_district(
             "==================================================================================="
         )
         today = datetime.datetime.today()
+        print(f"{today.strftime('%H:%M:%S')}")
         base_url = CALENDAR_URL_DISTRICT
-
+        global additionally_needed_delay
         if vaccine_type:
             base_url += f"&vaccine={vaccine_type}"
 
         options = []
-        for location in location_dtls:
-            resp = requests.get(
-                base_url.format(location["district_id"], start_date),
-                headers=request_header,
-            )
+        len_location_dtls=len(location_dtls)
+        max_retries=10
+        try:
+            loop_counterfile=open('loop_counter.txt',"r")
+        except FileNotFoundError as e:
+            subprocess.run(f"echo 0 > loop_counter.txt",shell=True)
+            loop_counterfile=open('loop_counter.txt',"r") 
+        loop_counter = int(loop_counterfile.read())
+        loop_counter = (0 + loop_counter) % len_location_dtls
+        loop_counterfile.close()
+        for i in range(len_location_dtls):
+            location = location_dtls[loop_counter]
+            #print(f"[{loop_counter}] ",end="",flush=True)
+            #if loop_counter !=0:
+                #pdb.set_trace()
+            retry_counter = 0
+            while retry_counter < max_retries:
+                retry_counter=retry_counter+1
+                check_req_delay(location['district_name'])
+                temp=time.time()
+                resp = requests.get(
+                    base_url.format(location["district_id"], start_date),
+                    headers=request_header,
+                )
+             #   print(f"rr_delay={time.time()-temp:.2f}",end=" ",flush=True)
 
-            if resp.status_code == 401:
-                print("TOKEN INVALID")
-                return False
+                if resp.status_code == 401:
+                    print("TOKEN INVALID")
+                    
+                    base_request_header = {
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36',
+                        'origin': 'https://selfregistration.cowin.gov.in/',
+                        'referer': 'https://selfregistration.cowin.gov.in/'
+                    
+                    }
+                    token =None
+                    temp=time.time()
+                    while token ==None:
+                        token = generate_token_OTP_manual(mobile, base_request_header)
+              #      print(f"otp_delay={time.time()-temp:.2f}",end=" ",flush=True)
+                    request_header = copy.deepcopy(base_request_header)
+                    request_header["Authorization"] = f"Bearer {token}"
+                elif resp.status_code == 200:
+                    resp = resp.json()
+                    #get_all_dist(resp)
+                    if "centers" in resp:
+                        retry_counter = max_retries+1
+                        if do_not_book == 'y':
+                            temp=time.time()
+                            #minimum_slots = 0
+                            record_availability(resp, minimum_slots,dose_num)
+               #             print(f"r_delay={time.time()-temp:.2f}",end=" ",flush=True)
+               #     else:
+               #         print(f"not 'centers' in resp. resp={resp}")
+                    resp = filter_centers_by_age(resp, min_age_booking)
+                    
+                    if "centers" in resp:
+                        if do_not_book == 'y':
+                            #minimum_slots=0
+                            pass
+                        else:
+                            options += viable_options(
+                                resp, minimum_slots, min_age_booking, fee_type, dose_num
+                            )
+              #              print(
+              #                  f"From {day_words(start_date)} {len(options)} Sessions available: in {len(resp['centers'])} Centers in {location['district_name']} updated on {today.strftime('%Y-%m-%d %H:%M:%S')} ",end='\r',flush=True
+              #              )
 
-            elif resp.status_code == 200:
-                resp = resp.json()
-
-                resp = filter_centers_by_age(resp, min_age_booking)
-
-                if "centers" in resp:
-                    print(
-                        f"Centers available in {location['district_name']} from {start_date} as of {today.strftime('%Y-%m-%d %H:%M:%S')}: {len(resp['centers'])}"
-                    )
-                    options += viable_options(
-                        resp, minimum_slots, min_age_booking, fee_type, dose_num
-                    )
-
-            else:
-                pass
-
+                else:
+                    if resp.status_code==429:
+                        print(str(f"<{resp.status_code}> {resp.reason}"))
+                        time.sleep(5)
+                        additionally_needed_delay=additionally_needed_delay+0.5
+                    else:
+                        print(f"<{resp.status_code}> {resp.text}")
+            loop_counter = (1 + loop_counter) % len_location_dtls
+            loop_counterfile=open('loop_counter.txt',"w")
+            loop_counterfile.write(f"{loop_counter}")
+            loop_counterfile.close()
+            
+        #for loop of locations ends here
+        if do_not_book == 'y':beep_required=False
         # beep only when needed
         if beep_required:
             for location in location_dtls:
@@ -398,8 +696,9 @@ def check_calendar_by_district(
         return options
 
     except Exception as e:
-        print(str(e))
+        print(traceback.print_exception(type(e),e,e.__traceback__))
         beep(WARNING_BEEP_DURATION[0], WARNING_BEEP_DURATION[1])
+        
 
 
 def check_calendar_by_pincode(
@@ -431,6 +730,7 @@ def check_calendar_by_pincode(
 
         options = []
         for location in location_dtls:
+            check_req_delay()
             resp = requests.get(
                 base_url.format(location["pincode"], start_date), headers=request_header
             )
@@ -552,7 +852,6 @@ def book_appointment(request_header, details, mobile, generate_captcha_pref):
         print(str(e))
         beep(WARNING_BEEP_DURATION[0], WARNING_BEEP_DURATION[1])
 
-
 def check_and_book(
         request_header, beneficiary_dtls, location_dtls, pin_code_location_dtls, search_option, **kwargs
 ):
@@ -564,6 +863,7 @@ def check_and_book(
         4. Calls function to book appointment, and
         5. Returns True or False depending on Token Validity
     """
+    global reccomended_delay
     slots_available = False
     try:
         min_age_booking = get_min_age(beneficiary_dtls)
@@ -576,8 +876,9 @@ def check_and_book(
         fee_type = kwargs["fee_type"]
         mobile = kwargs["mobile"]
         captcha_automation = kwargs['captcha_automation']
+        do_not_book = kwargs['do_not_book']
         dose_num = kwargs['dose_num']
-
+        reccomended_delay = refresh_freq
         if isinstance(start_date, int) and start_date == 2:
             start_date = (
                     datetime.datetime.today() + datetime.timedelta(days=1)
@@ -597,6 +898,7 @@ def check_and_book(
                 min_age_booking,
                 fee_type,
                 dose_num,
+                do_not_book,
                 beep_required=False
             )
 
@@ -621,7 +923,9 @@ def check_and_book(
                 min_age_booking,
                 fee_type,
                 dose_num,
-                beep_required=True
+                do_not_book,
+                beep_required=True,
+                mobile=mobile
             )
         else:
             options = check_calendar_by_pincode(
@@ -637,7 +941,6 @@ def check_and_book(
 
         if isinstance(options, bool):
             return False
-
         options = sorted(
             options,
             key=lambda k: (
@@ -654,19 +957,29 @@ def check_and_book(
             for item in tmp_options:
                 item.pop("session_id", None)
                 item.pop("center_id", None)
+                item.pop("slots", None)
+                item.pop("district", None)
+                item.pop("address", None)
                 cleaned_options_for_display.append(item)
 
-            display_table(cleaned_options_for_display)
-            slots_available = True
+            if do_not_book == 'n':
+                slots_available = True
+                display_table(cleaned_options_for_display)
+            else:
+                slots_available = False
+                time.sleep(refresh_freq)
         else:
-            for i in range(refresh_freq, 0, -1):
-                msg = f"No viable options. Next update in {i} seconds.."
-                print(msg, end="\r", flush=True)
-                sys.stdout.flush()
-                time.sleep(1)
+            #for i in range(refresh_freq, 0, -1):
+            #    msg = f"No viable options. Next update in {i} seconds.."
+            #    print(msg, end="\r", flush=True)
+            #    sys.stdout.flush()
+            #    time.sleep(1)
+            time.sleep(refresh_freq)
             slots_available = False
 
-    except TimeoutOccurred:
+    except TimeoutOccurred as e:
+        
+        print(traceback.print_exception(type(e),e,e.__traceback__))
         time.sleep(1)
         return True
 
@@ -709,6 +1022,8 @@ def check_and_book(
             for i in range(0, len(options)):
                 option = options[i]
                 all_slots_of_a_center = option.get("slots", [])
+                all_slots_of_a_center = [all_slots_of_a_center[0]]
+                #pdb.set_trace()
                 if not all_slots_of_a_center:
                     continue
                 # For better chances of booking, use random slots of a particular center
@@ -806,10 +1121,11 @@ def get_pincodes():
 def get_districts(request_header):
     """
     This function
-        1. Lists all states, prompts to select one,
-        2. Lists all districts in that state, prompts to select required ones, and
+        1. Lists all states, prompts to select one or more,
+        2. Lists all districts in those states, prompts to select required ones, and
         3. Returns the list of districts as list(dict)
     """
+    check_req_delay("states")
     states = requests.get(
         "https://cdn-api.co-vin.in/api/v2/admin/location/states", headers=request_header
     )
@@ -823,48 +1139,66 @@ def get_districts(request_header):
             refined_states.append(tmp)
 
         display_table(refined_states)
-        state = int(input("\nEnter State index: "))
-        state_id = states[state - 1]["state_id"]
-
-        districts = requests.get(
-            f"https://cdn-api.co-vin.in/api/v2/admin/location/districts/{state_id}",
-            headers=request_header,
-        )
-
-        if districts.status_code == 200:
-            districts = districts.json()["districts"]
-
-            refined_districts = []
-            for district in districts:
-                tmp = {"district": district["district_name"]}
-                refined_districts.append(tmp)
-
-            display_table(refined_districts)
-            reqd_districts = input(
-                "\nEnter comma separated index numbers of districts to monitor : "
+        #state = int(input("\nEnter State index: "))
+        #state_id = states[state - 1]["state_id"]
+        reqd_states = input(
+                "\nEnter comma separated index numbers of districts to monitor (just press enter for all): "
             )
-            districts_idx = [int(idx) - 1 for idx in reqd_districts.split(",")]
-            reqd_districts = [
-                {
-                    "district_id": item["district_id"],
-                    "district_name": item["district_name"],
-                    "alert_freq": 440 + ((2 * idx) * 110),
-                }
-                for idx, item in enumerate(districts)
-                if idx in districts_idx
-            ]
-
-            print(f"Selected districts: ")
-            display_table(reqd_districts)
-            return reqd_districts
-
+        if reqd_states != '':
+            state_idx = [int(idx) - 1 for idx in reqd_states.split(",")]
         else:
-            print("Unable to fetch districts")
-            print(districts.status_code)
-            print(districts.text)
-            
-            sys.exit(1)
+            state_idx = []
+            for i in range(len(states)):
+                state_idx.append(states[i]['state_id'])
+        all_districts=[]
+        for state_id in state_idx:
+            check_req_delay(f"districts for state_id {state_id}")
+            districts = requests.get(
+                f"https://cdn-api.co-vin.in/api/v2/admin/location/districts/{state_id}",
+                headers=request_header,
+            )
 
+            if districts.status_code == 200:
+                districts = districts.json()["districts"]
+
+                refined_districts = []
+                for district in districts:
+                    tmp = {"district": district["district_name"]}
+                    refined_districts.append(tmp)
+
+                display_table(refined_districts)
+                reqd_districts = input(
+                    "\nEnter comma separated index numbers of districts to monitor : "
+                )
+                
+                if reqd_districts != '':
+                    districts_idx = [int(idx) - 1 for idx in reqd_districts.split(",")]
+                else:
+                    districts_idx = []
+                    for i in range(len(districts)):
+                        districts_idx.append(i)
+                reqd_districts = [
+                    {
+                        "district_id": item["district_id"],
+                        "district_name": item["district_name"],
+                        "alert_freq": 440 + ((2 * idx) * 110),
+                    }
+                    for idx, item in enumerate(districts)
+                    if idx in districts_idx
+                ]
+
+                print(f"Selected districts: ")
+                display_table(reqd_districts)
+                all_districts.extend(reqd_districts)
+         
+
+            else:
+                print("Unable to fetch districts")
+                print(districts.status_code)
+                print(districts.text)
+                
+                sys.exit(1)
+        return all_districts
     else:
         print("Unable to fetch states")
         print(states.status_code)
@@ -874,6 +1208,7 @@ def get_districts(request_header):
 
 
 def fetch_beneficiaries(request_header):
+    check_req_delay('beneficieries')
     return requests.get(BENEFICIARIES_URL, headers=request_header)
 
 
@@ -1012,6 +1347,7 @@ def clear_bucket_and_send_OTP(storage_url, mobile, request_header):
         "secret": "U2FsdGVkX1+z/4Nr9nta+2DrVJSv7KS6VoQUSQ1ZXYDx/CJUkWxFYG6P3iM/VW+6jLQ9RDQVzp/RcZ8kbT41xw==",
     }
     print(f"Requesting OTP with mobile number {mobile}..")
+    check_req_delay('generateMobileOTP')
     txnId = requests.post(
         url="https://cdn-api.co-vin.in/api/v2/auth/generateMobileOTP",
         json=data,
@@ -1068,6 +1404,7 @@ def generate_token_OTP(mobile, request_header):
     data = {"otp": sha256(str(OTP.strip()).encode("utf-8")).hexdigest(), "txnId": txnId}
     print(f"Validating OTP..")
 
+    check_req_delay("validateMobileOtp")
     token = requests.post(
         url="https://cdn-api.co-vin.in/api/v2/auth/validateMobileOtp",
         json=data,
@@ -1080,13 +1417,13 @@ def generate_token_OTP(mobile, request_header):
         print(token.text)
         return None
 
-    print(f"Token Generated: {token}")
+    print(f"Token Generated: {jwt.JWT().decode(token,do_verify=False,do_time_check=False)}")
     return token
 
 def input_with_timeout(prompt,timeout):
     #not sure how to implement timeout
     global global_otp
-    st=time.time()
+    global st
     print("you may enter otp in otp.txt")
     subprocess.run("open -t otp.txt",shell=True)
     subprocess.run("osascript -e 'quit app \"Preview\"'",shell=True)
@@ -1094,39 +1431,86 @@ def input_with_timeout(prompt,timeout):
         try:
             mod_time=subprocess.check_output(["date", "-r", "otp.txt", "+%s"])
             if int(mod_time)>st-1:
-                file=open('otp.txt','r')
-                global_otp=file.readline().strip()
-                break
-            else:
-               print(f"time otp.txt:{int(mod_time)}")
-               print(f"time start  :{st}")
+                otpfile=open('otp.txt','r')
+                answer=otpfile.readline().strip()
+                otpfile.close()
+                subprocess.run("osascript -e 'quit app \"TextEdit\"'",shell=True)
+                subprocess.run("open -a Terminal",shell=True)
+                print(f"Received otp {answer} in otp.txt")
+                
+                kill_otp_from_notifications = True
+                return answer
+            #else:
+            #    print(f"mod_time={int(mod_time)}")
+            #    print(f"st-1={st-1}")
         except Exception as e:
             print(e)
-        if global_otp != 'not assigned':
+        time.sleep(1)
+        print(f"{time.strftime('%M:%S',time.gmtime(round(timeout-time.time()+st)))}",end='\r',flush=True)
+    print("Timeout")
+    kill_otp_from_notifications = True
+    return 'not assigned'
+
+def otp_from_notifications():
+    global st
+    global global_token
+    global kill_otp_from_notifications
+    notifications_watcher = subprocess.Popen("osascript read_cowin_otp.applescript",shell=True)
+    while notifications_watcher.returncode == None:
+        try:
+            token_file=open('token.txt','r')
+            token_time = json.load(token_file)
+            if time.time()-jwt.JWT().decode(token_time['token'],do_verify=False)['iat'] < 3*60:
+                global_token = token_time['token']
+                file=open('otp.txt','w')
+                file.write('token')
+                print(f"{time.time()} wrote token in otp.txt")
+                break
+        except Exception as e:
+            print(e)
+        if kill_otp_from_notifications:
+            break
+        if time.time()-st>=3*60:
+            break
+        mod_time=subprocess.check_output(["date", "-r", "otp.txt", "+%s"])
+        if int(mod_time)>st-1:
             break
         time.sleep(1)
-    print(f"YOU provided:{global_otp}")
-    subprocess.run("osascript -e 'quit app \"TextEdit\"'",shell=True)
+        notifications_watcher.poll()
+
+    notifications_watcher.kill()
+    notifications_watcher.wait()
     return
+        
+
 def otp_from_screenshots():
-    global global_otp
+    return
     global global_token
     global kill_otp_from_screenshots
-    st=time.time()
+    global st
     answer = 'unknown'
     #print(f"{time.strftime('%H:%M:%S')} START")
     flag_popup=True
     while time.time()-st<3*60:
-        if global_otp != 'not assigned':return
+        try:
+            mod_time=subprocess.check_output(["date", "-r", "otp.txt", "+%s"])
+            if int(mod_time)>st-1:
+                file=open('otp.txt','r')
+                print(f"otp_screenshots shutting down bcz modtime={mod_time}")
+                return
+        except Exception as e:
+            print(e)
         try:
             token_file=open('token.txt','r')
             token_time = json.load(token_file)
-            if time.time()-jwt.JWT().decode(token_time['token'],do_verify=False)['exp'] < 3*60:
+            if time.time()-jwt.JWT().decode(token_time['token'],do_verify=False)['iat'] < 3*60:
                 global_token = token_time['token']
-                global_otp='token'
+                file=open('otp.txt','w')
+                file.write('token')
+                print(f"{time.time()} wrote token in otp.txt")
                 return
         except Exception as e:
-            pass
+            print(e)
         subprocess.run("screencapture otp.jpg",shell=True)
         img=cv2.imread('./otp.jpg')
         #83 1120 14 290
@@ -1134,10 +1518,6 @@ def otp_from_screenshots():
         #740 480 75 475
         roi1 = img[740:740+75,480:480+475]
         #pdb.set_trace()
-        if flag_popup:
-            cv2.imwrite('out.jpg',roi)
-            subprocess.run(f"open out.jpg",shell=True)
-            flag_popup=False
         text = pytesseract.image_to_string(roi)
         text1 = pytesseract.image_to_string(roi1)
         #print(f"{time.strftime('%H:%M:%S')} OCR for otp:\"{text.strip()}\" or \"{text1.strip()}\"",end='\r')
@@ -1162,7 +1542,9 @@ def otp_from_screenshots():
         if kill_otp_from_screenshots:
             return
     #print(f"{time.strftime('%H:%M:%S')} OCR for otp:\"{text.strip()}\"")
-    global_otp=answer
+    otpfile=open('otp.txt','w')
+    otpfile.write(answer)
+    otpfile.close()
     return answer
 
 
@@ -1172,6 +1554,7 @@ def generate_token_OTP_manual(mobile, request_header):
     """
     global global_otp
     global global_token
+    global st
     if not mobile:
         print("Mobile number cannot be empty")
         os.system('pause')
@@ -1185,38 +1568,37 @@ def generate_token_OTP_manual(mobile, request_header):
                     }
             global_otp='not assigned' 
             kill_otp_from_screenshots=False
+            kill_otp_from_notifications=False
+            st=time.time()
             t1 = threading.Thread(target=otp_from_screenshots)
             t1.start()
-            t2 = threading.Thread(target=input_with_timeout,args=('Enter otp',180))
+            t2 = threading.Thread(target=otp_from_notifications)
             t2.start()
-            
+            check_req_delay("requested OTP")
             txnId = requests.post(url=OTP_PRO_URL, json=data, headers=request_header)
 
             if txnId.status_code == 200:
                 print(f"Successfully requested OTP for mobile number {mobile} at {datetime.datetime.today()}..")
                 txnId = txnId.json()['txnId']
+                OTP =input_with_timeout('Enter otp',180)
+                print(f"{datetime.datetime.today().strftime('%H:%M:%S.%f')} Waiting for t2 &t1.join()")
+                t1.join()
+                t2.join()
+                print(f"{datetime.datetime.today().strftime('%H:%M:%S.%f')} yayy! t1 &t2 .join()")
 
                 #OTP = input("Enter OTP (If this takes more than 2 minutes, press Enter to retry): ")
-                st = time.time()
-                while time.time()-st<3*60:
-                    if global_otp== 'not assigned':
-                        time.sleep(1)
-                    else:
-                        if global_otp=='token':
-                            token = global_token
-                            if t1.is_alive():
-                                print("t1 should not be alive, global_token is assigned")
-                                t1.join()
-                            return token
-                        else:
-                            OTP=global_otp
-                            t1.join()
-                            break
-                t1.join()
-                if OTP:
+                if OTP == 'token':
+                    token = global_token
+                    if t1.is_alive():
+                        print("t1 should not be alive, global_token is assigned")
+                        t1.join()
+                    return token
+                if OTP == 'not assigned':
+                    print("DID not receive OTP")
+                elif OTP:
                     data = {"otp": sha256(str(OTP).encode('utf-8')).hexdigest(), "txnId": txnId}
                     print(f"Validating OTP..")
-
+                    check_req_delay("Validating OTP")
                     token = requests.post(url='https://cdn-api.co-vin.in/api/v2/auth/validateMobileOtp', json=data,
                                           headers=request_header)
                     if token.status_code == 200:
@@ -1224,7 +1606,7 @@ def generate_token_OTP_manual(mobile, request_header):
                         json.dump(token.json(),file)
                         file.close()
                         token = token.json()['token']
-                        print(f'Token Generated: {token}')
+                        print(f"Token Generated: {jwt.JWT().decode(token,do_verify=False,do_time_check=False)}")
                         valid_token = True
                         return token
 
@@ -1232,29 +1614,21 @@ def generate_token_OTP_manual(mobile, request_header):
                         print('Unable to Validate OTP')
                         print(f"Response: {token.text}")
 
-                        retry = input(f"Retry with {mobile} ? (y/n Default y): ")
-                        retry = retry if retry else 'y'
-                        if retry == 'y':
-                            pass
-                        else:
-                            sys.exit()
 
             else:
                 kill_otp_from_screenshots=True
+                kill_otp_from_notifications = True
                 t1.join()
+                t2.join()
                 print('Unable to Generate OTP')
                 print(txnId.status_code, txnId.text)
 
-                retry = input(f"Retry with {mobile} ? (y/n Default y): ")
-                retry = retry if retry else 'y'
-                if retry == 'y':
-                    pass
-                else:
-                    sys.exit()
 
         except Exception as e:
-            kill_otp_from_screenshots=True
+            kill_otp_from_screenshots = True
+            kill_otp_from_notifications = True
             t1.join()
+            t2.join()
             time.sleep(5)
             
             print(traceback.print_exception(type(e),e,e.__traceback__))
