@@ -12,8 +12,9 @@ from inputimeout import inputimeout, TimeoutOccurred
 import tabulate, copy, time, datetime, requests, sys, os, random
 from captcha import captcha_builder_manual, captcha_builder_auto
 import uuid
-
+CANCEL_URL = "https://cdn-api.co-vin.in/api/v2/appointment/cancel"
 BOOKING_URL = "https://cdn-api.co-vin.in/api/v2/appointment/schedule"
+REBOOKING_URL = "https://cdn-api.co-vin.in/api/v2/appointment/reschedule"
 BENEFICIARIES_URL = "https://cdn-api.co-vin.in/api/v2/appointment/beneficiaries"
 CALENDAR_URL_DISTRICT = "https://cdn-api.co-vin.in/api/v2/appointment/sessions/calendarByDistrict?district_id={0}&date={1}"
 CALENDAR_URL_PINCODE = "https://cdn-api.co-vin.in/api/v2/appointment/sessions/calendarByPin?pincode={0}&date={1}"
@@ -25,12 +26,14 @@ WARNING_BEEP_DURATION = (1000, 5000)
 
 origins = ['303,Dhanori Road, Pune, 411015, Maharashtra, India']
 #origins = ['B14 Mangal Bhairav, Ghule Patil Nagar, Pandurang Industrial Area, Nanded, Pune, Maharashtra 411041']
+#origins = ['ALTTC, Kamla Nehru Nagar, Ghaziabad, Uttar Pradesh']
 global_otp = 'not assigned'
 kill_otp_from_screenshots =False
 global_token = 'not assigned'
 flag_update_from_file=True
 global_distance_from_home={}
 st=time.time()
+beneficiaries_choice = ""
 kill_otp_from_notifications = False
 time_req = []
 reccomended_delay=4
@@ -252,8 +255,9 @@ def record_availability(resp, minimum_slots,dose_num):
     #    else:print(f"resp['centers']={resp['centers']}")
     #else:print(f"resp={resp}")
     return 
-
+logged = {}
 def viable_options(resp, minimum_slots, min_age_booking, fee_type, dose_num):
+    global logged
     options = []
     if len(resp["centers"]) >= 0:
         for center in resp["centers"]:
@@ -267,15 +271,19 @@ def viable_options(resp, minimum_slots, min_age_booking, fee_type, dose_num):
                 # Cowin uses slot number for display post login, but checks available_capacity before booking appointment is allowed
                 available_capacity = min(session[f'available_capacity_dose{dose_num}'], session['available_capacity'])
                 if center["fee_type"] == 'Paid':
-                    fee = int(center['vaccine_fees'][0]['fee'])
+                    if 'vaccine_fees' in center:
+                        fee = int(center['vaccine_fees'][0]['fee'])
+                    else:
+                        fee = -1
                 else:
                     fee = 0
                 if (
                         (available_capacity >= minimum_slots)
                         and (center["fee_type"] in fee_type)
-                        and (cent_temp[0]['travel']['distance']['value']<=12000 )
+                        and (cent_temp[0]['travel']['distance']['value']<=999999999 )
                         and (fee <= 1000)
                 ):
+                    print(f"{time.time() }found a session!!!")
                     out = {
                         "name": center["name"],
                         "district": center["district_name"],
@@ -283,18 +291,27 @@ def viable_options(resp, minimum_slots, min_age_booking, fee_type, dose_num):
                         "center_id": center["center_id"],
                         "vaccine": session["vaccine"],
                         "fee_type": center["fee_type"],
+                        "fee": fee,
                         "available": available_capacity,
                         "date": session["date"],
                         "slots": session["slots"],
                         "session_id": session["session_id"],
                         "address": center["address"],
                         "age":session["min_age_limit"],
-                        "dist":cent_temp[0]['travel']['distance']['text']
+                        "dist":cent_temp[0]['travel']['distance']['value']
                     }
                     options.append(out)
 
                 else:
-                    print(f"skipping {center['name'].center(35)} {cent_temp[0]['travel']['distance']['text']} {available_capacity}available fee={fee}")
+                    if session['session_id'] not in logged:
+                        print(f"skipping {center['name'].center(35)} {cent_temp[0]['travel']['distance']['text']} {available_capacity} available for {session['date']} fee={fee}")
+                        logged.update({session['session_id']:available_capacity})
+                    else:
+                        if logged[session['session_id']] != available_capacity:
+                            print(f"skipping {center['name'].center(35)} {cent_temp[0]['travel']['distance']['text']} {available_capacity} available for {session['date']} fee={fee}")
+                            logged.update({session['session_id']:available_capacity})
+                            
+                    
                     pass
     else:
         pass
@@ -358,9 +375,13 @@ def save_user_info(filename, details):
         print(f"Info saved to {filename} in {os.getcwd()}")
 
 
-def get_saved_user_info(filename):
+def get_saved_user_info(filename,request_header):
     with open(filename, "r") as f:
         data = json.load(f)
+    names=[]
+    for beneficiary in data['beneficiary_dtls']:
+        names.append(beneficiary['name'])
+    data['beneficiary_dtls'] = get_beneficiaries(request_header,names)
 
     # for backward compatible logic
     if data["search_option"] !=3 and "pin_code_location_dtls" not in data:
@@ -396,9 +417,10 @@ def start_date_search():
 
 def collect_user_details(request_header):
     # Get Beneficiaries
+    global beneficiaries_choice
     print("Fetching registered beneficiaries.. ")
+    beneficiaries_choice=""
     beneficiary_dtls = get_beneficiaries(request_header)
-
 
     if len(beneficiary_dtls) == 0:
         print("There should be at least one beneficiary. Exiting.")
@@ -523,6 +545,8 @@ def collect_user_details(request_header):
     captcha_automation = "y" if not captcha_automation else captcha_automation
     do_not_book = input("Do you want to just observe and not book?(y/n) Default y: ")
     do_not_book = "y" if not do_not_book else do_not_book
+    reschedule = input("Do you want to reschedule? (y/n) Default n: ")
+    reschedule = "n" if not reschedule else reschedule
     
 
     collected_details = {
@@ -538,6 +562,7 @@ def collect_user_details(request_header):
         "fee_type": fee_type,
         'captcha_automation': captcha_automation,
         'do_not_book': do_not_book,
+        'reschedule': reschedule,
     }
 
     return collected_details
@@ -675,10 +700,12 @@ def check_calendar_by_district(
 
                 else:
                     if resp.status_code==429:
+                        pdb.set_trace()
                         print(str(f"<{resp.status_code}> {resp.reason}"))
                         time.sleep(5)
                         additionally_needed_delay=additionally_needed_delay+0.5
                     else:
+                        pdb.set_trace()
                         print(f"<{resp.status_code}> {resp.text}")
             loop_counter = (1 + loop_counter) % len_location_dtls
             loop_counterfile=open('loop_counter.txt',"w")
@@ -780,7 +807,7 @@ def generate_captcha(request_header, captcha_automation):
         return captcha_builder_auto(resp.json())
 
 
-def book_appointment(request_header, details, mobile, generate_captcha_pref):
+def book_appointment(request_header, details, mobile, generate_captcha_pref,reschedule,beneficiary_dtls):
     """
     This function
         1. Takes details in json format
@@ -794,18 +821,34 @@ def book_appointment(request_header, details, mobile, generate_captcha_pref):
     try:
         valid_captcha = True
         while valid_captcha:
+            print(f"{time.time() }attempting to book the session(getting captcha)!!!")
             captcha = generate_captcha(request_header, generate_captcha_pref)
             # os.system('say "Slot Spotted."')
             details["captcha"] = captcha
-
+   
+            print(f"{time.time() }attempting to book the session!!!")
             print(
                 "================================= ATTEMPTING BOOKING =================================================="
             )
-
-            resp = requests.post(BOOKING_URL, headers=request_header, json=details)
+            if reschedule == 'n':
+                resp = requests.post(BOOKING_URL, headers=request_header, json=details)
+            else:
+                resp = requests.post(REBOOKING_URL, headers=request_header, json=details)
+                
             print(f"Booking Response Code: {resp.status_code}")
             print(f"Booking Response : {resp.text}")
-
+            print(f"{time.time() }checking if we booked the session!!!")
+            updated_beneficiary_dtls = get_beneficiaries(request_header) 
+            if len(beneficiary_dtls)==len(updated_beneficiary_dtls):
+                for i in range(len(updated_beneficiary_dtls)):
+                    if 'appointments' in beneficiary_dtls[i]:
+                        for appointment in updated_beneficiary_dtls[i]['appointments']:
+                            if (appointment['session_id'] == details['session_id'] and appointment['slot'] == details['slot']):
+                                print(json.dumps(updated_beneficiary_dtls,indent='    '))
+                                print(f"{time.time() } booked the session!!!")
+                                sys.exit()
+            else:
+                print(f"len(beneficiary_dtls)={len(beneficiary_dtls)} len(updated_beneficiary_dtls)={len(updated_beneficiary_dtls)}")
             if resp.status_code == 401:
                 print("TOKEN INVALID")
                 return 0
@@ -852,6 +895,27 @@ def book_appointment(request_header, details, mobile, generate_captcha_pref):
         print(str(e))
         beep(WARNING_BEEP_DURATION[0], WARNING_BEEP_DURATION[1])
 
+def check_and_cancel(
+        request_header
+):
+    pdb.set_trace()
+    beneficiary_dtls = get_beneficiaries(request_header)
+    for beneficiary in beneficiary_dtls:
+        if 'appointments' in beneficiary:
+            for appointment in beneficiary['appointments']:
+                data = {"appointment_id":appointment['appointment_id'],"beneficiariesToCancel":[beneficiary['bref_id']]}
+                print(json.dumps(appointment,indent='    '))
+                temp=input('ARE YOU SURE YOU WANT TO CANCEL y/n:')
+                if temp == 'n':return
+                resp = requests.post(url=CANCEL_URL, json=data, headers=request_header)
+                if resp.ok:
+                    print('Cancelled')
+    beneficiary_dtls = get_beneficiaries(request_header)
+    for beneficiary in beneficiary_dtls:
+        if 'appointments' in beneficiary:
+            print(f"{beneficiary['name']} appointments: {beneficiary['appointments']}")
+    
+
 def check_and_book(
         request_header, beneficiary_dtls, location_dtls, pin_code_location_dtls, search_option, **kwargs
 ):
@@ -879,6 +943,7 @@ def check_and_book(
         do_not_book = kwargs['do_not_book']
         dose_num = kwargs['dose_num']
         reccomended_delay = refresh_freq
+        reschedule = kwargs['reschedule']
         if isinstance(start_date, int) and start_date == 2:
             start_date = (
                     datetime.datetime.today() + datetime.timedelta(days=1)
@@ -951,20 +1016,9 @@ def check_and_book(
             ),
         )
 
-        tmp_options = copy.deepcopy(options)
-        if len(tmp_options) > 0:
-            cleaned_options_for_display = []
-            for item in tmp_options:
-                item.pop("session_id", None)
-                item.pop("center_id", None)
-                item.pop("slots", None)
-                item.pop("district", None)
-                item.pop("address", None)
-                cleaned_options_for_display.append(item)
-
+        if len(options) > 0:
             if do_not_book == 'n':
                 slots_available = True
-                display_table(cleaned_options_for_display)
             else:
                 slots_available = False
                 time.sleep(refresh_freq)
@@ -1012,17 +1066,39 @@ def check_and_book(
                 options,
                 key=lambda k: (BUCKET_SIZE*int(k.get('available', 0)/BUCKET_SIZE)) + random.randint(0, BUCKET_SIZE-1),
                 reverse=True)
-
+            options = sorted(options,key=lambda k:k['dist'])
             start_epoch = int(time.time())
-
+            #pdb.set_trace()
+            options_temp=[]
+            print(beneficiary_dtls[0])
+            if len(beneficiary_dtls[0]['appointments'])>0:
+                for option in options:
+                    if option['session_id'] != beneficiary_dtls[0]['appointments'][0]['session_id']:
+                        options_temp.append(option)
+                    else:
+                        print(f"ommiting {option['name'].center(35)} {option['dist']} {option['available']} available for {option['date']} fee={option['fee']}")
+                options=options_temp
             # if captcha automation is enabled then have less duration for stale information of centers & slots.
             MAX_ALLOWED_DURATION_OF_STALE_INFORMATION_IN_SECS = 1*60 if captcha_automation == 'n' else 2*60
 
             # Now try to look into all options unless it is not authentication related issue
+            tmp_options = copy.deepcopy(options)
+            if len(tmp_options) > 0:
+                cleaned_options_for_display = []
+                for item in tmp_options:
+                    item.pop("session_id", None)
+                    item.pop("center_id", None)
+                    item.pop("slots", None)
+                    item.pop("district", None)
+                    item.pop("address", None)
+                    cleaned_options_for_display.append(item)
+                display_table(cleaned_options_for_display)
+            #pdb.set_trace()
             for i in range(0, len(options)):
                 option = options[i]
+                    
                 all_slots_of_a_center = option.get("slots", [])
-                all_slots_of_a_center = [all_slots_of_a_center[0]]
+                all_slots_of_a_center = [all_slots_of_a_center[len(all_slots_of_a_center)-1]]
                 #pdb.set_trace()
                 if not all_slots_of_a_center:
                     continue
@@ -1043,19 +1119,26 @@ def check_and_book(
                     try:
                         center_id = option["center_id"]
                         print(f"============> Trying Choice # {i} Center # {center_id}, Slot #{selected_slot}")
-
+                        #pdb.set_trace()
                         dose_num = 2 if [beneficiary["status"] for beneficiary in beneficiary_dtls][0] == "Partially Vaccinated" else 1
-                        new_req = {
-                            "beneficiaries": [
-                                beneficiary["bref_id"] for beneficiary in beneficiary_dtls
-                            ],
-                            "dose": dose_num,
-                            "center_id": option["center_id"],
-                            "session_id": option["session_id"],
-                            "slot": selected_slot,
-                        }
+                        if reschedule =='n':
+                            new_req = {
+                                "beneficiaries": [
+                                    beneficiary["bref_id"] for beneficiary in beneficiary_dtls
+                                ],
+                                "dose": dose_num,
+                                "center_id": option["center_id"],
+                                "session_id": option["session_id"],
+                                "slot": selected_slot,
+                            }
+                        else:
+                            new_req = {
+                                "appointment_id": beneficiary_dtls[0]['appointments'][0]["appointment_id"],#"3255a383-5ec9-49d6-8972-5c63d1335cfc",#hardcoded found by trying to reschedule from website in web inspecter network "benefeciaries" request
+                                "session_id": option["session_id"],
+                                "slot": selected_slot,
+                            }
                         print(f"Booking with info: {new_req}")
-                        booking_status = book_appointment(request_header, new_req, mobile, captcha_automation)
+                        booking_status = book_appointment(request_header, new_req, mobile, captcha_automation,reschedule,beneficiary_dtls)
                         # is token error ? If yes then break the loop by returning immediately
                         if booking_status == 0:
                             return False
@@ -1232,14 +1315,16 @@ def vaccine_dose2_duedate(vaccine_type):
 
 
 
-def get_beneficiaries(request_header):
+def get_beneficiaries(request_header,names=[]):
     """
     This function
         1. Fetches all beneficiaries registered under the mobile number,
         2. Prompts user to select the applicable beneficiaries, and
         3. Returns the list of beneficiaries as list(dict)
     """
+    global beneficiaries_choice
     beneficiaries = fetch_beneficiaries(request_header)
+    #pdb.set_trace()
 
     vaccinated=False
 
@@ -1268,31 +1353,42 @@ def get_beneficiaries(request_header):
                 "vaccine": beneficiary["vaccine"],
                 "age": beneficiary["age"],
                 "status": beneficiary["vaccination_status"],
-                "dose1_date":beneficiary["dose1_date"]
+                "dose1_date":beneficiary["dose1_date"],
             }
             if vaccinated:
                 tmp["due_date"]=beneficiary["dose2_due_date"]
             refined_beneficiaries.append(tmp)
-
-        display_table(refined_beneficiaries)
-        #print(refined_beneficiaries)
-        print(
+        
+        if names:
+            for i in range(len(refined_beneficiaries)):
+                if refined_beneficiaries[i]['name'] in names:
+                    if beneficiaries_choice == "":
+                        beneficiaries_choice=f"{i+1}"
+                    else:
+                        beneficiaries_choice=f"{beneficiaries_choice},{i+1}"
+        if beneficiaries_choice == "":
+            display_table(refined_beneficiaries)
+            #print(refined_beneficiaries)
+            print(
+                """
+            ################# IMPORTANT NOTES #################
+            # 1. While selecting beneficiaries, make sure that selected beneficiaries are all taking the same dose: either first OR second.
+            #    Please do no try to club together booking for first dose for one beneficiary and second dose for another beneficiary.
+            #
+            # 2. While selecting beneficiaries, also make sure that beneficiaries selected for second dose are all taking the same vaccine: COVISHIELD OR COVAXIN.
+            #    Please do no try to club together booking for beneficiary taking COVISHIELD with beneficiary taking COVAXIN.
+            #
+            # 3. If you're selecting multiple beneficiaries, make sure all are of the same age group (45+ or 18+) as defined by the govt.
+            #    Please do not try to club together booking for younger and older beneficiaries.
+            ###################################################
             """
-        ################# IMPORTANT NOTES #################
-        # 1. While selecting beneficiaries, make sure that selected beneficiaries are all taking the same dose: either first OR second.
-        #    Please do no try to club together booking for first dose for one beneficiary and second dose for another beneficiary.
-        #
-        # 2. While selecting beneficiaries, also make sure that beneficiaries selected for second dose are all taking the same vaccine: COVISHIELD OR COVAXIN.
-        #    Please do no try to club together booking for beneficiary taking COVISHIELD with beneficiary taking COVAXIN.
-        #
-        # 3. If you're selecting multiple beneficiaries, make sure all are of the same age group (45+ or 18+) as defined by the govt.
-        #    Please do not try to club together booking for younger and older beneficiaries.
-        ###################################################
-        """
-        )
-        reqd_beneficiaries = input(
-            "Enter comma separated index numbers of beneficiaries to book for : "
-        )
+            )
+            reqd_beneficiaries = input(
+                "Enter comma separated index numbers of beneficiaries to book for : "
+            )
+            beneficiaries_choice= reqd_beneficiaries 
+        else:
+            reqd_beneficiaries = beneficiaries_choice
         beneficiary_idx = [int(idx) - 1 for idx in reqd_beneficiaries.split(",")]
         reqd_beneficiaries = [
             {
@@ -1301,7 +1397,8 @@ def get_beneficiaries(request_header):
                 "vaccine": item["vaccine"],
                 "age": item["age"],
                 "status": item["vaccination_status"],
-                "dose1_date":item["dose1_date"]
+                "dose1_date":item["dose1_date"],
+                "appointments":item["appointments"]
             }
                                 
             for idx, item in enumerate(beneficiaries)
@@ -1316,8 +1413,9 @@ def get_beneficiaries(request_header):
                     dose2DueDate=dose1_date+datetime.timedelta(days=days_remaining)
                     beneficiary["dose2_due_date"]=dose2DueDate.strftime("%d-%m-%Y")
 
-        print(f"Selected beneficiaries: ")
-        display_table(reqd_beneficiaries)
+        if beneficiaries_choice == "":
+            print(f"Selected beneficiaries: ")
+            display_table(reqd_beneficiaries)
         return reqd_beneficiaries
 
     else:

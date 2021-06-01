@@ -8,14 +8,13 @@ import json
 import base64
 import os
 import sys
-
+import pdb
+import subprocess
 def captcha_builder_manual(resp):
     with open('captcha.svg', 'w') as f:
         f.write(re.sub('(<path d=)(.*?)(fill="none"/>)', '', resp['captcha']))
 
-    drawing = svg2rlg('captcha.svg')
-    renderPM.drawToFile(drawing, "captcha.png", fmt="PNG")
-
+    subprocess.run("python drawtofile.py",shell=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     im = Image.open('captcha.png')
     im = im.convert('RGB').convert('P', palette=Image.ADAPTIVE)
     im.save('captcha.gif')

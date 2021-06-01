@@ -7,7 +7,7 @@ import time,json
 from types import SimpleNamespace
 import requests, sys, argparse, os, datetime
 import jwt,pdb
-from utils import generate_token_OTP, generate_token_OTP_manual, check_and_book, beep, BENEFICIARIES_URL, WARNING_BEEP_DURATION, \
+from utils import generate_token_OTP, generate_token_OTP_manual, check_and_cancel,check_and_book, beep, BENEFICIARIES_URL, WARNING_BEEP_DURATION, \
     display_info_dict, save_user_info, collect_user_details, get_saved_user_info, confirm_and_proceed, get_dose_num, display_table, fetch_beneficiaries
 
 
@@ -36,6 +36,7 @@ def is_token_valid(token):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--token', help='Pass token directly')
+    parser.add_argument('--cancel', help='To cancel y/n')
     args = parser.parse_args()
 
     filename = 'vaccine-booking-details-'
@@ -57,6 +58,11 @@ def main():
         token = None
         token=is_token_valid(token) #fetches token from token.txt if valid
         #pdb.set_trace()
+        if args.cancel:
+            cancel = args.cancel
+        else:
+            cancel = 'n'
+        
         if args.token:
             token = args.token
         print("Sumit  Airtel  Hotspot number : 9028865261")
@@ -78,7 +84,7 @@ def main():
             try_file = try_file if try_file else 'y'
 
             if try_file == 'y':
-                collected_details = get_saved_user_info(filename)
+                collected_details = get_saved_user_info(filename,request_header)
                 print("\n================================= Info =================================\n")
                 display_info_dict(collected_details)
 
@@ -97,34 +103,6 @@ def main():
             save_user_info(filename, collected_details)
             confirm_and_proceed(collected_details)
 
-        # HACK: Temporary workaround for not supporting reschedule appointments
-        beneficiary_ref_ids = [beneficiary["bref_id"]
-                               for beneficiary in collected_details["beneficiary_dtls"]]
-        beneficiary_dtls    = fetch_beneficiaries(request_header)
-        if beneficiary_dtls.status_code == 200:
-            beneficiary_dtls    = [beneficiary
-                                   for beneficiary in beneficiary_dtls.json()['beneficiaries']
-                                   if  beneficiary['beneficiary_reference_id'] in beneficiary_ref_ids]
-            active_appointments = []
-            for beneficiary in beneficiary_dtls:
-                expected_appointments = (1 if beneficiary['vaccination_status'] == "Partially Vaccinated" else 0)
-                if len(beneficiary['appointments']) > expected_appointments:
-                    data             = beneficiary['appointments'][expected_appointments]
-                    beneficiary_data = {'name': data['name'],
-                                        'state_name': data['state_name'],
-                                        'dose': data['dose'],
-                                        'date': data['date'],
-                                        'slot': data['slot']}
-                    active_appointments.append({"beneficiary": beneficiary['name'], **beneficiary_data})
-
-            if active_appointments:
-                print("The following appointments are active! Please cancel them manually first to continue")
-                display_table(active_appointments)
-                beep(WARNING_BEEP_DURATION[0], WARNING_BEEP_DURATION[1])
-                return
-        else:
-            print("WARNING: Failed to check if any beneficiary has active appointments. Please cancel before using this script")
-            input("Press any key to continue execution...")
 
         info = SimpleNamespace(**collected_details)
 
@@ -144,6 +122,11 @@ def main():
                         token = generate_token_OTP_manual(mobile, base_request_header)
                 request_header["Authorization"] = f"Bearer {token}"
 
+                if cancel == 'y':
+                    check_and_cancel(
+                    request_header, 
+                    )
+                    return
                 check_and_book(
                     request_header, 
                     info.beneficiary_dtls,
@@ -159,7 +142,8 @@ def main():
                     mobile=mobile,
                     captcha_automation=info.captcha_automation,
                     dose_num=get_dose_num(collected_details),
-                    do_not_book=info.do_not_book
+                    do_not_book=info.do_not_book,
+                    reschedule=info.reschedule
                             )
             except Exception as e:
                 print(traceback.print_exception(type(e),e,e.__traceback__))
