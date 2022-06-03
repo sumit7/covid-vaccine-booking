@@ -1,10 +1,8 @@
-<h1 align="center"> Bombardier Fully Automated COVID-19 Vaccination Slot Booking Script</h1>
+<h1 align="center"> Fully Automated COVID-19 Vaccination Slot Booking Script</h1>
 
 <div align="center">
 
-<i>This is a fork over the neat [covid-vaccine-booking](https://github.com/pallupz/covid-vaccine-booking). Thanks for creating a playground for me to build on :metal:</i>
-
-<i>Loved the project? Please consider [donating](http://buymeacoff.ee/bombardier) to help it improve!</i>
+<i>This is a fork over the [covid-vaccine-booking](https://github.com/bombardier-gif/covid-vaccine-booking). Thanks for this!:metal:</i>
 
 </div>
 
@@ -24,7 +22,7 @@
 
 ### 2. On your Phone (Required for fetching OTP automatically)
 1. **Android Phone**: Follow either [Option 1: IFTTT app](#option-1-ifttt) or [Option 2: CoWIN OTP Retriever app](#option-2-cowin-otp-retriever)
-2. **iPhone**: Follow [Using Shortcuts app](#using-shortcuts-app)
+2. **iPhone**: Sync messeges with your mac and let them come in notifications. The scripts will automatically read it.
 
 <br>
 
@@ -149,30 +147,6 @@
 
 <br>
 
-## Setup Guide for iOS
-
-### Using Shortcuts app
-1. Open the shortcuts app
-2. Tap on the + button at the top right
-3. Tap on `Create Personal Automation`
-3. Select the `Message` option
-4. Put `CoWIN` in the Message Contains option & leave everything blank. Tap on Next button
-5. Tap on `Add action` and search for the option `Set Variable`. Give the variable name `text` and input as `Shortcut Input`
-6. Then add another action and select `URL` and paste the url: https://kvdb.io/ASth4wnvVDPkg2bdjsiqMN/99XXXXXXXX replace 99XXXXXXXX with your phone number
-7. Then add another action and select `Get Contents of Url`. Click on show more. Change the method to `PUT`. Request Body to `File` and in the file row tap on `Choose Variable` and select `text` which we defined in Step 6.
-8. Click Next and save this automation.
-9. Clone this repository
-Go to `src` directory and run the script  `cd src && python covid-vaccine-slot-booking.py`
-15. On Mac I had to do the following too
-     - `brew install python-tk`
-     - `brew install SoX`
-18. Run the script, enter your phone number. 
-19. Now as soon as OTP is recieved you will also get a notification from shortcuts app. Long press it and click on run. It will start OTP auto read process.
-20. Use the steps given below to enter your preferences. 
-21. Now whenever the script session expires, it will send the notification  described in step 13 and repeat the process to trigger OTP auto read. 
-22. It is recommended that you set a different notification tone for this notification to be able to distinguish.
-23. Hopefully you get the slot
-24. Stay healthy and stay safe!
 
 #### Shortcuts steps in screenshots
 
